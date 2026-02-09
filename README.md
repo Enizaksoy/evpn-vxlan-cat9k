@@ -86,6 +86,7 @@ Follow these guides in order:
 7. [Step 7: NVE Interface](docs/07-nve-interface.md) - VXLAN tunnel endpoint
 8. [Step 8: SVI Configuration](docs/08-svi-config.md) - VLAN interfaces for routing
 9. [Step 9: Verification Commands](docs/09-verification.md) - Show commands to verify setup
+10. [Step 10: Live Verification Output](docs/10-verification-output.md) - Actual output from running fabric
 
 ## Quick Start - Adding a New VLAN
 
