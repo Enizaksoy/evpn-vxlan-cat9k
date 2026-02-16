@@ -130,7 +130,7 @@ details>.detail-body{border:1px solid #dfe1e6;border-top:none;border-radius:0 0 
 
 <h1 class="page-title">OnPrem Multi-Vendor EVPN VXLAN Integration</h1>
 <div class="page-meta">
-  Cisco Catalyst 9300 &bull; Versa FlexVNF &bull; Cumulus Linux (NVIDIA) &nbsp;|&nbsp; Version 2.0 &nbsp;|&nbsp; Last updated: February 10, 2026 &nbsp;|&nbsp; INTERNAL
+  Cisco Catalyst 9300 &bull; Versa FlexVNF &bull; Cumulus Linux (NVIDIA) &nbsp;|&nbsp; Version 2.1 &nbsp;|&nbsp; Last updated: February 16, 2026 &nbsp;|&nbsp; INTERNAL
 </div>
 
 <!-- ==================== 1 ==================== -->
@@ -156,7 +156,7 @@ details>.detail-body{border:1px solid #dfe1e6;border-top:none;border-radius:0 0 
   <tr><td>BGP EVPN Peers</td><td><span class="badge badge-ok">Established</span></td></tr>
   <tr><td>VXLAN Tunnels</td><td><span class="badge badge-ok">4 VTEPs UP</span></td></tr>
   <tr><td>Cross-vendor MAC Learning</td><td><span class="badge badge-ok">Working</span></td></tr>
-  <tr><td>VXLAN-GBP (Versa)</td><td><span class="badge badge-fixed">FIXED</span></td></tr>
+  <tr><td>VXLAN-GBP (Multi-Vendor)</td><td><span class="badge badge-fixed">FIXED</span></td></tr>
 </table>
 </div>
 </div>
@@ -556,7 +556,7 @@ nve1       401151   L2CP 1.1.1.5     2             401151     UP   00:48:57</pre
     nolearning ttl 64 udpcsum <strong>gbp</strong>
     bridge_slave state <strong>forwarding</strong> learning <strong>off</strong> neigh_suppress <strong>on</strong></pre>
 
-<div class="panel panel-info"><strong>Key Parameters</strong> <code>nolearning</code> = EVPN controls FDB, <code>neigh_suppress</code> = ARP suppression, <code>gbp</code> = VXLAN-GBP enabled (required for Versa interop).</div>
+<div class="panel panel-info"><strong>Key Parameters</strong> <code>nolearning</code> = EVPN controls FDB, <code>neigh_suppress</code> = ARP suppression, <code>gbp</code> = VXLAN-GBP enabled (required for interop with any GBP-sending VTEP: Cisco with SGT/GBP, Versa, etc.).</div>
 
 <!-- ==================== 10 ==================== -->
 <h2 id="s10">10. MAC Address Learning</h2>
@@ -583,7 +583,7 @@ aabb.cc00.2f10 1151  1151  1.1.1.4         (remote - Versa)</pre>
 
 <div class="panel panel-error">
 <strong>Issue: NET-2026-001 &mdash; Severity: HIGH</strong>
-Ping from Cumulus client (192.168.1.12) to Versa client (192.168.1.10) fails with 100% packet loss. EVPN control plane is fully operational. Root cause: Versa FlexVNF sends VXLAN packets with GBP (Group Based Policy) flags. Linux kernel silently drops GBP-flagged packets on non-GBP VXLAN interfaces.
+100% data plane packet loss from any GBP-sending VTEP to Cumulus Linux. EVPN control plane is fully operational (BGP sessions up, routes exchanged, NVE peers visible). Root cause: <strong>Multiple vendors</strong> send VXLAN packets with GBP (Group Based Policy) flags (0x88) &mdash; including <strong>Cisco Catalyst 9300</strong> with <code>group-based-policy</code> + CTS/SGT enabled, and <strong>Versa FlexVNF</strong> (GBP always on by default). The Linux kernel VXLAN driver silently drops GBP-flagged packets on non-GBP VXLAN interfaces. This is <strong>not a vendor-specific issue</strong> &mdash; it is a Linux kernel behavior.
 </div>
 
 <h3>11.1 What is VXLAN-GBP?</h3>
@@ -632,6 +632,7 @@ Flags byte = <strong style="color:#de350b">0x88</strong>  (G-bit + I-bit)
 
 <h3>11.2 Packet Capture Evidence</h3>
 
+<h4>Evidence A: Versa FlexVNF &rarr; Cumulus (GBP always on)</h4>
 <p>Captured on sw1 spine between Cumulus (1.1.1.5) and Versa (1.1.1.4):</p>
 
 <pre class="dark"><span style="color:#6a9955"># tshark -r BGP-EVPN.pcap -Y "vxlan" -T fields -e frame.number -e ip.src -e ip.dst -e vxlan.flags -e vxlan.vni</span>
@@ -644,20 +645,34 @@ Frame  Source (outer)    Destination (outer)  Flags   VNI
 14     1.1.1.4 Versa  → 1.1.1.5 Cumulus      <span style="color:#f44747">0x8808</span>  401151
 ...    (pattern repeats for ALL packets)</pre>
 
-<h3>11.3 Raw Hex Dump</h3>
+<h4>Evidence B: Cisco sw2 with SGT &rarr; Cumulus (GBP + SGT 100)</h4>
+<p>Captured on Cumulus swp1 with <code>tcpdump -i swp1 -n 'udp port 4789' -XX -vvv</code>:</p>
 
-<p><strong>Packet 11</strong> &mdash; Cumulus &rarr; Versa &mdash; <span class="badge badge-ok">Standard VXLAN</span></p>
-<pre class="dark hex">0x0020  01 04 a5 43 12 b5 00 82 e1 2e <span class="hl-green">08 00 00 00</span> 06 1e
-0x0030  ff 00 aa bb cc 00 2f 10 ...  (inner: 192.168.1.12 → .10 ICMP)
+<pre class="dark"><span style="color:#6a9955"># Cisco sw2 (1.1.1.2, group-based-policy ON) → Cumulus (1.1.1.5)</span>
+<span style="color:#6a9955"># ICMP Echo Reply: 192.168.1.22 → 192.168.1.11</span>
 
-        VXLAN flags: <span class="hl-green">08</span> = 0000 1000 = I-bit only (standard)</pre>
+VXLAN Header (hex): <span style="color:#f44747">88</span> 00 <span style="color:#f44747">00 64</span> 06 1e ff 00
+                    ^^       ^^^^^
+                    |        Group Policy ID = 0x0064 = <strong style="color:#f44747">SGT 100</strong>
+                    Flags = <strong style="color:#f44747">0x88</strong> (G-bit + I-bit = GBP ENABLED)
 
-<p><strong>Packet 12</strong> &mdash; Versa &rarr; Cumulus &mdash; <span class="badge badge-versa">VXLAN-GBP</span></p>
-<pre class="dark hex">0x0020  01 05 12 b5 12 b5 00 82 f3 b4 <span class="hl-red">88 08 00 00</span> 06 1e
-0x0030  ff 00 aa bb cc 00 30 10 ...  (inner: 192.168.1.10 → .12 ICMP)
+<span style="color:#6a9955"># Cisco sw3 (1.1.1.3, NO group-based-policy) → Cumulus (1.1.1.5)</span>
+<span style="color:#6a9955"># ICMP Echo Reply: 192.168.1.23 → 192.168.1.11</span>
 
-        VXLAN flags: <span class="hl-red">88</span> = 1000 1000 = G-bit + I-bit (GBP!)
-        Group Policy ID: 0x08 = SGT 8</pre>
+VXLAN Header (hex): <span style="color:#4ec9b0">08</span> 00 00 00 06 1e ff 00
+                    ^^
+                    Flags = <span style="color:#4ec9b0">0x08</span> (I-bit only = STANDARD VXLAN)</pre>
+
+<div class="panel panel-warning"><strong>Key Finding</strong> Cisco sw2 with <code>group-based-policy</code> + CTS/SGT sends <strong>identical GBP flags (0x88)</strong> as Versa FlexVNF. The only difference is the Group Policy ID value (Cisco inserts the configured SGT tag, e.g., 100). Both cause the <strong>same packet drops</strong> on Cumulus Linux without the <code>gbp</code> flag.</div>
+
+<h3>11.3 Raw Hex Dump Comparison</h3>
+
+<pre class="dark hex"><span style="color:#6a9955">                    Flags Rsvd  GPID    VNI      Rsvd</span>
+<span style="color:#6a9955">                    ----- ----  ------  -------  ----</span>
+Cisco sw2 (GBP):   <span class="hl-red">88</span>    00    <span class="hl-red">00 64</span>   06 1e ff 00    ← SGT 100 in GPID field
+Cisco sw3 (std):   <span class="hl-green">08</span>    00    00 00   06 1e ff 00    ← No GBP, GPID=0
+Cumulus (std):     <span class="hl-green">08</span>    00    00 00   06 1e ff 00    ← No GBP, GPID=0
+Versa (GBP):      <span class="hl-red">88</span>    00    <span class="hl-red">xx xx</span>   06 1e ff 00    ← GBP enabled, GPID varies</pre>
 
 <h3>11.4 Why This Causes Failure</h3>
 
@@ -665,38 +680,53 @@ Frame  Source (outer)    Destination (outer)  Flags   VNI
   <li>Linux kernel VXLAN driver validates header flags strictly</li>
   <li>Without <code>gbp</code> option, kernel expects flags = <code>0x08</code> (I-bit only)</li>
   <li>Receiving <code>0x88</code> (G-bit set) &rarr; packet <strong>silently dropped</strong></li>
-  <li>No error, no log, no ICMP unreachable</li>
-  <li>ICMP request reaches Versa, reply comes back, but reply is dropped at Cumulus VXLAN decap</li>
+  <li>No error, no log, no counter increment, no ICMP unreachable</li>
+  <li>Affects <strong>all</strong> GBP-sending VTEPs equally: Cisco with SGT, Versa, or any other vendor using VXLAN-GBP</li>
 </ul>
 
 <pre style="background:#fafbfc;text-align:center;font-family:monospace;font-size:12px;line-height:1.6;padding:20px">
-Cumulus Client        Cumulus VTEP               Versa VTEP            Versa Client
-192.168.1.12          1.1.1.5                    1.1.1.4               192.168.1.10
-     │                    │                          │                      │
-     │── ICMP Request ──→ │                          │                      │
-     │                    │══ VXLAN flags=0x08 ═════→ │                      │
-     │                    │     (standard)            │── ICMP Request ────→ │
-     │                    │                          │                      │
-     │                    │                          │ ←── ICMP Reply ───── │
-     │                    │ ←══ VXLAN flags=0x88 ════ │                      │
-     │                    │     (GBP!)               │                      │
-     │                 <strong style="color:#de350b">[DROPPED]</strong>                      │                      │
-     │              kernel rejects GBP               │                      │
-     │              on non-GBP interface             │                      │
+                                                 GBP-Sending VTEP       Remote Client
+  Cumulus Client        Cumulus VTEP            (Cisco SGT / Versa)     192.168.1.x
+  192.168.1.12          1.1.1.5                 1.1.1.2 or 1.1.1.4
+       │                    │                          │                      │
+       │── ICMP Request ──→ │                          │                      │
+       │                    │══ VXLAN flags=0x08 ═════→ │                      │
+       │                    │     (standard)            │── ICMP Request ────→ │
+       │                    │                          │                      │
+       │                    │                          │ ←── ICMP Reply ───── │
+       │                    │ ←══ VXLAN flags=0x88 ════ │                      │
+       │                    │     (GBP!)               │                      │
+       │                 <strong style="color:#de350b">[DROPPED]</strong>                      │                      │
+       │              kernel rejects GBP               │                      │
+       │              on non-GBP interface             │                      │
 </pre>
 
-<div class="panel panel-info"><strong>Cisco Impact: None</strong> IOS-XE silently ignores GBP bits and processes packets normally. This only affects Linux kernel VXLAN (Cumulus).</div>
+<h3>11.5 Affected Traffic Flows</h3>
+<table>
+  <tr><th>Sender</th><th>Receiver</th><th>VXLAN Flags</th><th>Result</th></tr>
+  <tr><td><span class="badge badge-cisco">CISCO</span> sw2 (GBP+SGT ON)</td><td><span class="badge badge-cumulus">CUMULUS</span></td><td><strong style="color:#de350b">0x88</strong></td><td><strong style="color:#de350b">DROPPED</strong> (without <code>gbp</code> flag)</td></tr>
+  <tr><td><span class="badge badge-versa">VERSA</span> FlexVNF</td><td><span class="badge badge-cumulus">CUMULUS</span></td><td><strong style="color:#de350b">0x88</strong></td><td><strong style="color:#de350b">DROPPED</strong> (without <code>gbp</code> flag)</td></tr>
+  <tr><td><span class="badge badge-cisco">CISCO</span> sw3 (GBP OFF)</td><td><span class="badge badge-cumulus">CUMULUS</span></td><td><span style="color:#00875a">0x08</span></td><td><span class="badge badge-ok">OK</span></td></tr>
+  <tr><td><span class="badge badge-cumulus">CUMULUS</span></td><td>Any VTEP</td><td><span style="color:#00875a">0x08</span></td><td><span class="badge badge-ok">OK</span></td></tr>
+  <tr><td><span class="badge badge-cisco">CISCO</span> sw2 (GBP+SGT ON)</td><td><span class="badge badge-cisco">CISCO</span> sw3</td><td><strong style="color:#de350b">0x88</strong></td><td><span class="badge badge-ok">OK</span> (IOS-XE ignores GBP)</td></tr>
+</table>
+
+<div class="panel panel-info"><strong>Cisco IOS-XE Receivers: Not Affected</strong> IOS-XE silently ignores GBP bits and processes packets normally. This issue <strong>only affects Linux kernel VXLAN</strong> (Cumulus, Ubuntu, etc.).</div>
+
+<div class="panel panel-warning"><strong>Cisco as a Sender: Same Impact as Versa</strong> When <code>group-based-policy</code> is enabled under <code>interface nve1</code> on Cisco Catalyst 9300, it sends VXLAN-GBP headers (flags=0x88) with SGT tag. This causes the <strong>exact same packet drops</strong> on Cumulus as Versa does. The issue is <strong>symmetric</strong> &mdash; any GBP sender triggers the Linux kernel drop.</div>
 
 <!-- ==================== 12 ==================== -->
 <h2 id="s12">12. VXLAN-GBP Fix &amp; Resolution</h2>
 
 <table>
   <tr><th>Attribute</th><th>Detail</th></tr>
-  <tr><td>Affected Traffic</td><td>Cumulus &harr; Versa (data plane only)</td></tr>
-  <tr><td>Root Cause</td><td>Versa always sends VXLAN-GBP headers (flags=0x88). Linux kernel drops on non-GBP interfaces.</td></tr>
+  <tr><td>Affected Traffic</td><td>Any GBP-sending VTEP &rarr; Cumulus Linux (data plane only)</td></tr>
+  <tr><td>GBP Senders</td><td><strong>Cisco Catalyst 9300</strong> (with <code>group-based-policy</code> + CTS/SGT), <strong>Versa FlexVNF</strong> (GBP always on)</td></tr>
+  <tr><td>Root Cause</td><td>Linux kernel VXLAN driver drops packets with G-bit set (flags=0x88) on non-GBP interfaces. Not vendor-specific.</td></tr>
   <tr><td>Control Plane</td><td>Not affected &mdash; BGP EVPN routes exchanged correctly</td></tr>
-  <tr><td>Cisco Impact</td><td>None &mdash; IOS-XE ignores GBP bits</td></tr>
-  <tr><td>Fix Required On</td><td>Cumulus Linux only</td></tr>
+  <tr><td>Cisco as Receiver</td><td>Not affected &mdash; IOS-XE ignores GBP bits from other senders</td></tr>
+  <tr><td>Cisco as Sender</td><td><strong>Causes same drop</strong> on Cumulus when SGT/GBP enabled (flags=0x88, SGT in GPID field)</td></tr>
+  <tr><td>Fix Required On</td><td>Cumulus Linux (any Linux-based VTEP without <code>gbp</code> flag)</td></tr>
 </table>
 
 <h3>12.1 Step 1 &mdash; Recreate vxlan48 with GBP</h3>
@@ -746,7 +776,7 @@ vxlan48  <strong>1151 PVID Egress Untagged</strong>
 cumulus@cumulus:~$ sudo vtysh -c "show evpn vni 401151" | grep Vlan
  Vlan: <strong>1151</strong>          ← must be 1151, NOT 1</pre>
 
-<div class="panel panel-success"><strong>Resolution Confirmed</strong> After enabling GBP, Cumulus accepts VXLAN-GBP packets from Versa. Traffic flows between all VTEPs.</div>
+<div class="panel panel-success"><strong>Resolution Confirmed</strong> After enabling GBP, Cumulus accepts VXLAN-GBP packets from <strong>all</strong> GBP-sending VTEPs (Cisco with SGT and Versa). Traffic flows between all VTEPs.</div>
 
 <!-- ==================== 13 ==================== -->
 <h2 id="s13">13. Command Reference</h2>
@@ -801,7 +831,7 @@ cumulus@cumulus:~$ sudo vtysh -c "show evpn vni 401151" | grep Vlan
 <tr>
   <td>1</td>
   <td><strong>VXLAN-GBP Flag Mismatch</strong></td>
-  <td>100% data plane failure Cumulus &harr; Versa</td>
+  <td>100% data plane failure from any GBP-sending VTEP (Cisco with SGT, Versa) to Cumulus. Linux kernel VXLAN driver behavior, not vendor-specific.</td>
   <td>Enable <code>gbp</code> on Cumulus VXLAN interface at creation time</td>
 </tr>
 <tr>
@@ -831,15 +861,32 @@ cumulus@cumulus:~$ sudo vtysh -c "show evpn vni 401151" | grep Vlan
 </table>
 
 <h3>Recommendations</h3>
+
+<h4>For Linux-based VTEPs (Cumulus, Ubuntu, etc.)</h4>
 <ul>
+  <li><strong>Always create VXLAN interfaces with <code>gbp</code> flag</strong> when integrating with any GBP-capable VTEP (Cisco with SGT, Versa, or others)</li>
+  <li>Without <code>gbp</code>, the Linux kernel silently drops GBP-flagged packets &mdash; no logs, no counters, extremely difficult to diagnose</li>
   <li><strong>GBP Persistence:</strong> Edit <code>/etc/network/interfaces</code> or create post-boot script. NVUE doesn't support <code>gbp</code> natively.</li>
-  <li><strong>Monitoring:</strong> Check VXLAN flags after every <code>nv config apply</code> to ensure GBP preserved.</li>
-  <li><strong>Packet Captures:</strong> Always check VXLAN flags byte when troubleshooting multi-vendor interop.</li>
-  <li><strong>MTU:</strong> Standardize underlay MTU across all vendors.</li>
+  <li><strong>Monitoring:</strong> Check VXLAN flags after every <code>nv config apply</code> to ensure GBP preserved</li>
+</ul>
+
+<h4>For Cisco Catalyst 9300 with SGT/GBP</h4>
+<ul>
+  <li><strong>Enabling <code>group-based-policy</code> on NVE changes the VXLAN header format</strong> from standard (0x08) to GBP-extended (0x88)</li>
+  <li>This will break connectivity to any Linux-based VTEP that lacks the <code>gbp</code> interface flag</li>
+  <li>If SGT microsegmentation is not required, leave <code>group-based-policy</code> disabled to maintain standard VXLAN interoperability</li>
+</ul>
+
+<h4>For Multi-Vendor Fabrics</h4>
+<ul>
+  <li><strong>Test data plane connectivity after any GBP/SGT configuration change</strong> &mdash; control plane (BGP EVPN) will appear healthy even when data plane is completely broken</li>
+  <li><strong>Packet Captures:</strong> Use <code>tcpdump -i &lt;intf&gt; -n 'udp port 4789' -XX</code> to verify VXLAN flags byte (0x08 = standard, 0x88 = GBP)</li>
+  <li>The issue is <strong>symmetric</strong> &mdash; Cisco with SGT causes the same drop on Cumulus as Versa does</li>
+  <li><strong>MTU:</strong> Standardize underlay MTU across all vendors</li>
 </ul>
 
 <hr style="margin:40px 0 20px;border:none;border-top:1px solid #dfe1e6">
-<p style="text-align:center;font-size:12px;color:#6b778c"><strong>INTERNAL ENGINEERING DOCUMENT</strong><br>Multi-Vendor EVPN VXLAN &mdash; v2.0 &mdash; February 2026<br>Generated with Claude Code</p>
+<p style="text-align:center;font-size:12px;color:#6b778c"><strong>INTERNAL ENGINEERING DOCUMENT</strong><br>Multi-Vendor EVPN VXLAN &mdash; v2.1 &mdash; February 2026<br>Generated with Claude Code</p>
 
 </div><!-- /main -->
 </div><!-- /wiki-wrap -->
